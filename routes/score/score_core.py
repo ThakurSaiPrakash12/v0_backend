@@ -5,8 +5,8 @@ from . import score_bp
 from socket_instance import socketio
 from flask_cors import cross_origin
 
-def update_successor_match(successor_match_id, current_match_id, winning_team_id):
-    """Updates the successor match with the winning team"""
+def update_successor_match(successor_match_id, current_match_id, winning_team_id, auto_commit=True):
+    """Updates the successor match with the winning team idempotently"""
     try:
         successor_match = Match.query.get(successor_match_id)
         if not successor_match:
@@ -18,28 +18,40 @@ def update_successor_match(successor_match_id, current_match_id, winning_team_id
         elif successor_match.predecessor_2 == current_match_id:
             successor_match.team2_id = winning_team_id
             
-        # If both teams are set, create score entries
+        # If both teams are set, create initial score entries idempotently
         if successor_match.team1_id and successor_match.team2_id:
-            scores = [
-                Score(
-                    match_id=str(successor_match.id),
+            existing_t1 = Score.query.filter_by(
+                match_id=successor_match.id,
+                team_id=successor_match.team1_id,
+                tournament_id=successor_match.tournament_id
+            ).first()
+            if not existing_t1:
+                db.session.add(Score(
+                    match_id=successor_match.id,
                     team_id=successor_match.team1_id,
                     score=0,
                     tournament_id=successor_match.tournament_id
-                ),
-                Score(
-                    match_id=str(successor_match.id),
+                ))
+
+            existing_t2 = Score.query.filter_by(
+                match_id=successor_match.id,
+                team_id=successor_match.team2_id,
+                tournament_id=successor_match.tournament_id
+            ).first()
+            if not existing_t2:
+                db.session.add(Score(
+                    match_id=successor_match.id,
                     team_id=successor_match.team2_id,
                     score=0,
                     tournament_id=successor_match.tournament_id
-                )
-            ]
-            db.session.bulk_save_objects(scores)
+                ))
             
-        db.session.commit()
+        if auto_commit:
+            db.session.commit()
         
     except Exception as e:
-        db.session.rollback()
+        if auto_commit:
+            db.session.rollback()
         raise e 
 
 @score_bp.route('/update-score', methods=['POST'])
@@ -113,6 +125,7 @@ def update_score():
         # Update match final status and winner if final is True
         if final:
             match.is_final = True
+            match.outcome = None  # Normal final scoring clears any previous categorical outcome
             # Determine winner
             if team1_score > team2_score:
                 match.winner_team_id = match.team1_id
@@ -123,7 +136,7 @@ def update_score():
             print(f"Match finalized with winner_team_id: {match.winner_team_id}")
 
             if match.successor:
-                update_successor_match(match.successor, match.id, match.winner_team_id)
+                update_successor_match(match.successor, match.id, match.winner_team_id, auto_commit=False)
         
         # Commit all changes
         db.session.commit()
@@ -274,7 +287,8 @@ def get_match_score():
             },
             'status': match.status,
             'is_final': match.is_final,
-            'winner_team_id': match.winner_team_id
+            'winner_team_id': match.winner_team_id,
+            'outcome': match.outcome
         }
         
         return jsonify(response), 200

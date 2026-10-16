@@ -328,6 +328,13 @@ def record_walkover(match_id):
                 'error': 'winner_team_id must match one of the teams in this match'
             }), 400
 
+        # Guard against accidental overwrites on finalized matches unless explicit override is passed
+        override = data.get('override', False)
+        if match.is_final and not override:
+            return jsonify({
+                'error': 'Match is already completed. Pass override=True to modify.'
+            }), 400
+
         # Record the outcome and winner atomically.
         match.winner_team_id = winner_team_id
         match.outcome = 'walkover'
@@ -336,16 +343,31 @@ def record_walkover(match_id):
 
         db.session.flush()
 
-        # Advance the winner when the bracket has a successor.
+        # Advance the winner when the bracket has a successor atomically.
         if match.successor:
             from routes.score.score_core import update_successor_match
             update_successor_match(
                 match.successor,
                 match.id,
-                winner_team_id
+                winner_team_id,
+                auto_commit=False
             )
 
         db.session.commit()
+
+        # Emit Socket.IO event for real-time fixtures and overlays
+        try:
+            from socket_instance import socketio
+            socketio.emit('score_update', {
+                'match_id': match.id,
+                'tournament_id': tournament_id,
+                'status': match.status,
+                'is_final': match.is_final,
+                'winner_team_id': match.winner_team_id,
+                'outcome': match.outcome
+            }, namespace='/scores')
+        except Exception:
+            pass
 
         response = {
             'message': 'Walkover recorded successfully',
