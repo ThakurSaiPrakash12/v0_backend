@@ -297,6 +297,71 @@ def update_match_status(match_id):
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
+@match_bp.route('/matches/<int:match_id>/walkover', methods=['POST'])
+def record_walkover(match_id):
+    data = request.get_json(silent=True) or {}
+    tournament_id = data.get('tournament_id')
+    winner_team_id = data.get('winner_team_id')
+
+    if not tournament_id or not winner_team_id:
+        return jsonify({
+            'error': 'tournament_id and winner_team_id are required'
+        }), 400
+
+    try:
+        match = Match.query.filter_by(
+            id=match_id,
+            tournament_id=tournament_id
+        ).first()
+
+        if not match:
+            return jsonify({'error': 'Match not found'}), 404
+
+        # A Walkover must have two assigned teams and a valid winner.
+        if not match.team1_id or not match.team2_id:
+            return jsonify({
+                'error': 'Both teams must be assigned before recording a Walkover'
+            }), 400
+
+        if winner_team_id not in (match.team1_id, match.team2_id):
+            return jsonify({
+                'error': 'winner_team_id must match one of the teams in this match'
+            }), 400
+
+        # Record the outcome and winner atomically.
+        match.winner_team_id = winner_team_id
+        match.outcome = 'walkover'
+        match.status = 'completed'
+        match.is_final = True
+
+        db.session.flush()
+
+        # Advance the winner when the bracket has a successor.
+        if match.successor:
+            from routes.score.score_core import update_successor_match
+            update_successor_match(
+                match.successor,
+                match.id,
+                winner_team_id
+            )
+
+        db.session.commit()
+
+        response = {
+            'message': 'Walkover recorded successfully',
+            'match_id': match.id,
+            'winner_team_id': match.winner_team_id,
+            'outcome': match.outcome,
+            'status': match.status,
+            'is_final': match.is_final
+        }
+        return jsonify(response), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
 def verify_player_checkins(match):
     """Helper function to verify all players are checked in"""
     team1 = Team.query.get(match.team1_id)

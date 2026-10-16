@@ -167,9 +167,10 @@ def get_match_fixtures():
                 'team2_players': team2_players_str or "TBD",
                 'match_result': match_result,
                 'match_status': {
-                    'winner_team_id': match.winner_team_id,
-                    'is_final': match.is_final,
-                    'status': match.status
+                   'winner_team_id': match.winner_team_id,
+                   'is_final': match.is_final,
+                   'status': match.status,
+                   'outcome': match.outcome
                 },
                 'bracket_info': {
                     'round_number': match.round_number,
